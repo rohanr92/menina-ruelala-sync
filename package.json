@@ -1,0 +1,24 @@
+{
+  "name": "menina-ruelala-sync",
+  "version": "1.0.0",
+  "description": "Shopify app: syncs Menina Step inventory to Rue La La (VendorNet SFTP)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "csv-parse": "^7.0.3",
+    "exceljs": "^4.4.0",
+    "express": "^4.22.3",
+    "multer": "^2.5.0",
+    "pdf-parse": "1.1.1",
+    "pg": "^8.23.1",
+    "ssh2-sftp-client": "^12.1.1"
+  },
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="shopify-api-key" content="__SHOPIFY_API_KEY__" />
+  __APP_BRIDGE__
+  <title>Rue La La Sync</title>
+  <script>window.__DEV__ = {{DEV}};</script>
+  <link rel="preconnect" href="https://cdn.shopify.com" />
+  <link rel="stylesheet" href="https://cdn.shopify.com/static/fonts/inter/v4/styles.css" />
+  <link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <ui-nav-menu>
+    <a href="/" rel="home">Overview</a>
+    <a href="/skus">SKUs</a>
+    <a href="/import">Add SKUs</a>
+    <a href="/history">Sync history</a>
+    <a href="/settings">Settings</a>
+  </ui-nav-menu>
+
+  <div class="page">
+    <header class="page-header">
+      <div>
+        <h1 class="page-title">Rue La La inventory sync</h1>
+        <p class="page-sub" id="page-sub">Connecting…</p>
+      </div>
+      <div class="page-actions" id="page-actions"></div>
+    </header>
+
+    <nav class="tabs" id="tabs">
+      <button data-tab="overview">Overview</button>
+      <button data-tab="skus">SKUs</button>
+      <button data-tab="import">Add SKUs</button>
+      <button data-tab="history">Sync history</button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+
+    <main id="view"></main>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
