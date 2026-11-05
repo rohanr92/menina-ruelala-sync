@@ -235,11 +235,11 @@
           <span class="muted small">Shopify catalog read ${c.refreshedAt ? ago(c.refreshedAt).toLowerCase() : '—'} · <button class="btn btn-plain btn-sm" data-act="refresh-catalog">Refresh</button></span></div>
         <div class="card-body tight" style="margin-top:10px;border-top:1px solid var(--border)">
           <div class="metrics">
-            <div class="metric"><div class="v">${num(c.sending)}</div><div class="l">SKUs in each full file</div><a href="#" data-skus="ok">View</a></div>
+            <div class="metric"><div class="v">${num(c.sending)}</div><div class="l">SKUs in each full file${c.zeroMissing && c.missingInShopify ? ` <span class="subtle">(${num(c.fromShopify)} + ${num(c.missingInShopify)} at 0)</span>` : ''}</div><a href="#" data-skus="ok">View</a></div>
             <div class="metric"><div class="v">${num(c.inStock)}</div><div class="l">In stock</div><a href="#" data-skus="instock">View</a></div>
             <div class="metric"><div class="v">${num(c.units)}</div><div class="l">Units available</div></div>
             <div class="metric"><div class="v" style="${c.unmapped ? 'color:var(--critical)' : ''}">${num(c.unmapped)}</div><div class="l">In Shopify, no Supplier SKU</div>${c.unmapped ? '<a href="#" data-skus="unmapped">Fix</a>' : '<span class="small subtle">All mapped</span>'}</div>
-            <div class="metric"><div class="v">${num(c.missingInShopify)}</div><div class="l">Mapped, not in Shopify</div>${c.missingInShopify ? '<a href="#" data-skus="missing">View</a>' : '<span class="small subtle">None</span>'}</div>
+            <div class="metric"><div class="v">${num(c.missingInShopify)}</div><div class="l">Mapped, not in Shopify</div>${c.missingInShopify ? `<span class="small ${c.zeroMissing ? 'muted' : 'subtle'}">${c.zeroMissing ? 'Sent as 0' : 'Not sent'}</span> · <a href="#" data-skus="missing">View</a>` : '<span class="small subtle">None</span>'}</div>
           </div>
         </div>
         ${c.duplicates || c.negatives ? `<div class="card-foot"><span>${c.duplicates ? `${plural(c.duplicates, 'SKU')} used on more than one Shopify variant (only the first is sent). ` : ''}${c.negatives ? `${plural(c.negatives, 'SKU')} with negative stock in Shopify, sent as 0.` : ''}</span>${c.duplicates ? '<a href="#" data-skus="duplicate">Review</a>' : ''}</div>` : ''}
@@ -280,7 +280,7 @@
     const badge = (i) => ({
       ok: i.pending ? '<span class="badge attention">Change waiting</span>' : '<span class="badge success">Sending</span>',
       unmapped: '<span class="badge critical">No Supplier SKU</span>',
-      missing: '<span class="badge warning">Not in Shopify</span>',
+      missing: state.overview?.catalog?.zeroMissing === false ? '<span class="badge warning">Not in Shopify · not sent</span>' : '<span class="badge warning">Not in Shopify · sent as 0</span>',
       duplicate: '<span class="badge warning">Duplicate</span>',
     }[i.status]);
     const rows = data.items.map((i) => `<tr>
@@ -477,6 +477,8 @@
           <label class="field" style="margin:0"><span class="field-label">Shopify SKUs to send</span>
             <div class="row" style="align-items:center"><span style="flex:none" class="muted">Starts with</span><input type="text" name="skuPrefix" value="${esc(s.skuPrefix)}" style="max-width:120px"></div>
             <div class="help">Only variants whose Shopify SKU starts with this are sent as the Host SKU.</div></label>
+          <div class="divider"></div>
+          <label class="check"><input type="checkbox" name="zeroMissing" ${s.zeroMissing !== false ? 'checked' : ''}><span><span class="t">Send 0 for SKUs not found in Shopify</span><div class="help">On: Host SKUs in your Rue La La list that aren't in Shopify are sent with quantity 0, so Rue La La stops selling them. Off: they are left out of the file.</div></span></label>
         </div></div></div>
 
       <div class="section-grid"><div><h2>Full inventory sync</h2><p class="muted">Sends every mapped SKU, so Rue La La always has a complete, correct picture.</p></div>
@@ -538,6 +540,7 @@
       sftp: { host: form.host.value, port: form.port.value, username: form.username.value, password: form.password.value, directory: form.directory.value },
       filePrefix: form.filePrefix.value,
       paused: form.paused.checked,
+      zeroMissing: form.zeroMissing.checked,
     });
 
     $('#btn-test').onclick = async (e) => {

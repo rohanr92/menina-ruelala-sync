@@ -158,6 +158,7 @@ export function runSync({ kind, trigger }) {
         locationIds,
         prefix: settings.skuPrefix,
         onlySkus: kind === 'changes' ? new Set(pendingSnapshot) : null,
+        zeroMissing: settings.zeroMissing !== false,
       });
 
       if (kind === 'changes' && !rows.length) {

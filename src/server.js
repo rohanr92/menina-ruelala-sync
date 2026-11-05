@@ -129,7 +129,7 @@ api.get('/overview', wrap(async (req, res) => {
     kvGet('catalogRefreshedAt'),
   ]);
   const mappings = new Map(maps.rows.map((r) => [r.host_sku, r]));
-  const built = buildRows({ variants: vars.rows, mappings, locationIds, prefix: settings.skuPrefix });
+  const built = buildRows({ variants: vars.rows, mappings, locationIds, prefix: settings.skuPrefix, zeroMissing: settings.zeroMissing !== false });
   const shopifySkus = new Set(vars.rows.map((v) => v.sku));
   const missingInShopify = maps.rows.filter((m) => !shopifySkus.has(m.host_sku)).length;
   const run = currentRun();
@@ -161,6 +161,8 @@ api.get('/overview', wrap(async (req, res) => {
       inStock: built.rows.filter((r) => r.qty > 0).length,
       unmapped: built.unmapped.length,
       missingInShopify,
+      zeroMissing: settings.zeroMissing !== false,
+      fromShopify: built.rows.filter((r) => !r.missing).length,
       duplicates: built.duplicates.length,
       negatives: built.negatives.length,
     },
@@ -252,8 +254,10 @@ api.get('/skus', wrap(async (req, res) => {
     e.description = m.description;
     bySku.set(m.host_sku, e);
   }
+  const zeroMissing = settings.zeroMissing !== false;
   let items = [...bySku.values()].map((e) => ({
     ...e,
+    qty: !e.inShopify && e.supplierSku && zeroMissing ? 0 : e.qty,
     pending: pending.has(e.hostSku),
     status: !e.inShopify ? 'missing' : !e.supplierSku ? 'unmapped' : e.duplicate ? 'duplicate' : 'ok',
   }));
@@ -411,6 +415,7 @@ function mergeSettings(current, body) {
     }
   }
   if (typeof b.paused === 'boolean') next.paused = b.paused;
+  if (typeof b.zeroMissing === 'boolean') next.zeroMissing = b.zeroMissing;
   return next;
 }
 

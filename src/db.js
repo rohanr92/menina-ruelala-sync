@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS = {
   schedule: { enabled: true, times: ['06:00', '18:00'], timezone: 'America/New_York' },
   instant: { enabled: true, mode: 'changes', debounceSeconds: 120 },
   paused: false,
+  zeroMissing: true, // mapped Host SKUs not found in Shopify are sent with qty 0
 };
 
 export async function migrate() {

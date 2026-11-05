@@ -21,7 +21,7 @@ export function countedQty(levels, locationIds) {
  * @param locationIds  location ids whose stock is counted
  * @param onlySkus  optional Set of host SKUs to include (changes-only file)
  */
-export function buildRows({ variants, mappings, locationIds, prefix = '1311', onlySkus = null }) {
+export function buildRows({ variants, mappings, locationIds, prefix = '1311', onlySkus = null, zeroMissing = false }) {
   const rows = [];
   const unmapped = [];
   const duplicates = [];
@@ -41,8 +41,15 @@ export function buildRows({ variants, mappings, locationIds, prefix = '1311', on
     if (raw < 0) negatives.push({ sku, qty: raw });
     rows.push({ hostSku: sku, vendorSku: m.supplier_sku, qty: Math.max(0, raw) });
   }
+  const missing = [];
+  for (const [host, m] of mappings) {
+    if (seen.has(host) || !host.startsWith(prefix)) continue;
+    if (onlySkus && !onlySkus.has(host)) continue;
+    missing.push(host);
+    if (zeroMissing) rows.push({ hostSku: host, vendorSku: m.supplier_sku, qty: 0, missing: true });
+  }
   rows.sort((a, b) => a.hostSku.localeCompare(b.hostSku));
-  return { rows, unmapped, duplicates, negatives };
+  return { rows, unmapped, duplicates, negatives, missing };
 }
 
 export function toCsv(rows) {
