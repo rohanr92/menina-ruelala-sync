@@ -80,6 +80,7 @@
         <td>${badge(o.status)}${pendingAsn ? '<div class="sub"><span class="badge attention">Shipment file ready</span></div>' : ''}</td>
         <td class="num" style="white-space:nowrap">
           ${canImport ? `<button class="btn btn-primary btn-sm" data-import="${esc(o.orderNo)}" ${missing ? 'disabled title="Fix the missing SKU first"' : ''}>${o.status === 'error' ? 'Retry' : 'Import'}</button>` : ''}
+          <button class="btn btn-sm" data-slip="${esc(o.orderNo)}" title="Packing slip (PDF)">Packing slip</button>
           <button class="btn btn-sm" data-xlsx="${esc(o.orderNo)}" title="FedEx batch upload file">FedEx Excel</button>
         </td>
       </tr>`;
@@ -136,7 +137,8 @@
         <div class="filters">
           <div class="pills">${filters.map(([k, l]) => `<button class="pill ${st.filter === k ? 'active' : ''}" data-f="${k}">${l}</button>`).join('')}</div>
           <span style="flex:1"></span>
-          <button class="btn" id="g-fedex-all" ${waitingShip ? '' : 'disabled'}>FedEx Excel (all waiting to ship)</button>
+          <button class="btn" id="g-slips-all" ${waitingShip ? '' : 'disabled'} title="One page per order, all orders waiting to ship">All packing slips</button>
+          <button class="btn" id="g-fedex-all" ${waitingShip ? '' : 'disabled'} title="All orders waiting to ship, one row each">All-orders FedEx Excel</button>
           <button class="btn btn-primary" id="g-check">Check ${esc(s.getDir)} now</button>
         </div>
         ${orders.length ? `<div class="table-wrap"><table>
@@ -220,6 +222,7 @@
         refresh();
       };
     });
+    view.querySelectorAll('[data-slip]').forEach((b) => { b.onclick = () => download(`/gilt/orders/${encodeURIComponent(b.dataset.slip)}/slip.pdf`, `PackingSlip_RueGilt_${b.dataset.slip}.pdf`); });
     view.querySelectorAll('[data-xlsx]').forEach((b) => { b.onclick = () => download(`/gilt/orders/${encodeURIComponent(b.dataset.xlsx)}/fedex.xlsx`, `FedEx_RueGilt_${b.dataset.xlsx}.xlsx`); });
     view.querySelectorAll('[data-raw]').forEach((b) => { b.onclick = () => download(`/gilt/files/${encodeURIComponent(b.dataset.raw)}/raw`, b.dataset.raw); });
     view.querySelectorAll('[data-asncsv]').forEach((b) => { b.onclick = () => download(`/gilt/asn/${b.dataset.asncsv}/csv`, b.dataset.name); });
@@ -248,6 +251,7 @@
       } catch (e) { toast(e.message, true); }
       render();
     };
+    view.querySelector('#g-slips-all').onclick = () => download('/gilt/slips.pdf', 'PackingSlips_RueGilt.pdf');
     view.querySelector('#g-fedex-all').onclick = () => download('/gilt/fedex.xlsx', 'FedEx_RueGilt.xlsx');
     view.querySelector('#g-toggle-settings').onclick = () => { st.showSettings = !st.showSettings; refresh(); };
     const form = view.querySelector('#g-form');

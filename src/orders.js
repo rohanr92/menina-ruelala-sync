@@ -7,6 +7,7 @@ import {
   parseOrderFile, looksLikeOrderFile, buildAsnCsv, asnFileName, buildFedexWorkbook,
   shopifyOrderInput, FEDEX_DEFAULTS,
 } from './gilt.js';
+import { buildPackingSlips } from './slip.js';
 
 const log = (...a) => console.log(new Date().toISOString(), '[orders]', ...a);
 
@@ -471,6 +472,29 @@ export function registerOrderRoutes(api) {
     if (!rows.length) return res.status(404).json({ error: 'No orders waiting to ship.' });
     const day = new Date().toISOString().slice(0, 10);
     await sendXlsx(res, rows.map((r) => r.data), `FedEx_RueGilt_${day}_${rows.length}orders.xlsx`);
+  }));
+
+  // Packing slips (PDF), one page per order — same layout as the Radial slip.
+  async function sendSlips(res, orders, name) {
+    const buf = await buildPackingSlips(orders);
+    res.set('Content-Disposition', `attachment; filename="${name}"`);
+    res.type('application/pdf').send(buf);
+  }
+
+  api.get('/gilt/orders/:no/slip.pdf', wrap(async (req, res) => {
+    const { rows } = await q('SELECT data FROM gilt_orders WHERE order_no=$1', [req.params.no]);
+    if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+    await sendSlips(res, [rows[0].data], `PackingSlip_RueGilt_${req.params.no}.pdf`);
+  }));
+
+  api.get('/gilt/slips.pdf', wrap(async (req, res) => {
+    const list = String(req.query.orders || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const { rows } = list.length
+      ? await q(`SELECT data FROM gilt_orders WHERE order_no = ANY($1) ORDER BY order_no`, [list])
+      : await q(`SELECT data FROM gilt_orders WHERE status IN ('imported','partial') ORDER BY order_no`);
+    if (!rows.length) return res.status(404).json({ error: 'No orders waiting to ship.' });
+    const day = new Date().toISOString().slice(0, 10);
+    await sendSlips(res, rows.map((r) => r.data), `PackingSlips_RueGilt_${day}_${rows.length}orders.pdf`);
   }));
 
   api.get('/gilt/asn/:id/csv', wrap(async (req, res) => {

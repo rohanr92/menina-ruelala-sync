@@ -109,3 +109,11 @@ test('Shopify order: tag, unit cost, no emails, ship-to', () => {
   const retail = shopifyOrderInput(orders[0], new Map([['13115908050002', 'x']]), { priceField: 'retail' });
   assert.equal(retail.lineItems[0].priceSet.shopMoney.amount, '94.99');
 });
+
+test('packing slip PDF: one page per order', async () => {
+  const { buildPackingSlips } = await import('../src/slip.js');
+  const { orders } = parseOrderFile(TWO);
+  const pdf = await buildPackingSlips(orders);
+  assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
+  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) || []).length, 2);
+});

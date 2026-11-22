@@ -13,6 +13,7 @@
     "express": "^4.22.3",
     "multer": "^2.5.0",
     "pdf-parse": "1.1.1",
+    "pdfkit": "^0.21.0",
     "pg": "^8.23.1",
     "ssh2-sftp-client": "^12.1.1"
   },
