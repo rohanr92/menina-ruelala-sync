@@ -1,0 +1,11 @@
+api_version = "2026-10"
+
+[[extensions]]
+type = "ui_extension"
+name = "Rue Gilt label & packing slip"
+handle = "rue-gilt-order-block"
+uid = "0b439757-c78f-4796-9563-9fb07c95c4ff"
+
+[[extensions.targeting]]
+target = "admin.order-details.block.render"
+module = "./src/OrderBlock.jsx"

@@ -11,6 +11,17 @@ import { buildPackingSlips } from './slip.js';
 import { createLabel, cancelLabel, fedexConfigured, fedexEnv, testFedexLogin } from './fedex.js';
 import { PDFDocument } from 'pdf-lib';
 import multer from 'multer';
+import crypto from 'node:crypto';
+import { timingSafeEqual } from './util.js';
+
+/* ---------- signed download links (used by the Shopify order page card) ---------- */
+const DL_KINDS = ['label', 'slip', 'docs'];
+const sign = (kind, no, exp) => crypto.createHmac('sha256', process.env.SHOPIFY_API_SECRET || 'dev').update(`${kind}:${no}:${exp}`).digest('base64url');
+function signedUrl(kind, no) {
+  const exp = Math.floor(Date.now() / 1000) + 15 * 60; // 15 minutes
+  const base = (process.env.SHOPIFY_APP_URL || '').replace(/\/$/, '');
+  return `${base}/dl/${kind}/${encodeURIComponent(no)}?e=${exp}&s=${sign(kind, no, exp)}`;
+}
 
 const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
 
@@ -498,7 +509,66 @@ function summarize(r, skuSet) {
   };
 }
 
+async function labelPdfFor(no) {
+  const { rows } = await q(`SELECT tracking, label_pdf FROM gilt_labels WHERE order_no=$1 AND status='active' ORDER BY id DESC LIMIT 1`, [no]);
+  return rows[0] || null;
+}
+
+async function documentsFor(no, kind) {
+  const o = await q('SELECT data FROM gilt_orders WHERE order_no=$1', [no]);
+  if (!o.rows[0]) return null;
+  const label = await labelPdfFor(no);
+  if (kind === 'label') return label ? { name: `FedEx_${label.tracking}_${no}.pdf`, pdf: Buffer.from(label.label_pdf, 'base64') } : null;
+  const slip = await buildPackingSlips([o.rows[0].data], { logo: await slipLogo() });
+  if (kind === 'slip') return { name: `PackingSlip_RueGilt_${no}.pdf`, pdf: slip };
+  const parts = label ? [Buffer.from(label.label_pdf, 'base64'), slip] : [slip];
+  return { name: `RueGilt_${no}_label_and_slip.pdf`, pdf: await mergePdfs(parts) };
+}
+
+/** Public routes on the main app (not /api): time-limited signed PDF links. */
+export function registerDownloadRoutes(app) {
+  app.get('/dl/:kind/:no', async (req, res) => {
+    try {
+      const { kind, no } = req.params;
+      const exp = Number(req.query.e);
+      const good = DL_KINDS.includes(kind) && exp > Date.now() / 1000 && timingSafeEqual(String(req.query.s || ''), sign(kind, no, exp));
+      if (!good) return res.status(403).type('text').send('This link has expired. Reload the Shopify order page and click the button again.');
+      const doc = await documentsFor(no, kind);
+      if (!doc) return res.status(404).type('text').send('Not available yet.');
+      res.set('Content-Disposition', `inline; filename="${doc.name}"`);
+      res.type('application/pdf').send(doc.pdf);
+    } catch (e) {
+      res.status(500).type('text').send(e.message);
+    }
+  });
+}
+
 export function registerOrderRoutes(api) {
+  // Used by the "Rue Gilt" card on the Shopify order page.
+  api.get('/gilt/shopify-order/:id', wrap(async (req, res) => {
+    const id = Number(String(req.params.id).split('/').pop());
+    const { rows } = await q('SELECT * FROM gilt_orders WHERE shopify_order_id=$1', [id]);
+    const o = rows[0];
+    if (!o) return res.json({ rueGilt: false });
+    const label = await labelPdfFor(o.order_no);
+    const asn = await q(`SELECT status, tracking, sent_at FROM gilt_asn WHERE order_no=$1 ORDER BY id DESC LIMIT 1`, [o.order_no]);
+    res.json({
+      rueGilt: true,
+      orderNo: o.order_no,
+      status: o.status,
+      shipBy: o.data.shipBy,
+      tracking: label?.tracking || null,
+      labelError: o.label_error,
+      canCreateLabel: fedexConfigured() && !label && o.status === 'imported',
+      shipment: asn.rows[0] || null,
+      links: {
+        label: label ? signedUrl('label', o.order_no) : null,
+        slip: signedUrl('slip', o.order_no),
+        docs: signedUrl('docs', o.order_no),
+      },
+    });
+  }));
+
   api.get('/gilt/overview', wrap(async (req, res) => {
     const cfg = await getOrderSettings();
     const session = await getSession();

@@ -14,7 +14,7 @@ import {
 } from './sync.js';
 import { buildRows } from './feed.js';
 import { parseMappingFile } from './mappingImport.js';
-import { registerOrderRoutes, startOrderPoller, migrateOrders, onFulfillmentWebhook } from './orders.js';
+import { registerOrderRoutes, registerDownloadRoutes, startOrderPoller, migrateOrders, onFulfillmentWebhook } from './orders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, '..', 'public');
@@ -65,6 +65,20 @@ function sendIndex(req, res) {
 app.get('/', sendIndex);
 app.use('/assets', express.static(path.join(PUBLIC, 'assets'), { maxAge: '1h' }));
 app.get('/healthz', (req, res) => res.json({ ok: true }));
+registerDownloadRoutes(app);
+
+// The Shopify order-page card (admin UI extension) calls the API from Shopify's extension sandbox.
+app.use('/api', (req, res, next) => {
+  const origin = req.get('Origin');
+  if (origin && /^https:\/\/([a-z0-9-]+\.)*(shopify\.com|shopifycdn\.com|shopifysvc\.com|myshopify\.com)$/.test(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
 /* ---------- API auth (App Bridge session token) ---------- */
 

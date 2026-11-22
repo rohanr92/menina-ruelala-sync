@@ -1,0 +1,11 @@
+{
+  "name": "rue-gilt-order-block",
+  "private": true,
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@preact/signals": "^2.11.4",
+    "@shopify/ui-extensions": "2026.10.2",
+    "preact": "^10.29.8"
+  }
+}
