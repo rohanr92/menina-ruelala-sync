@@ -73,7 +73,7 @@ async function loadVariants() {
 
 /* ---------- SFTP ---------- */
 
-function sftpConfig(settings) {
+export function sftpConfig(settings) {
   const s = settings.sftp;
   const password = process.env.SFTP_PASSWORD || decrypt(s.passwordEnc);
   if (!s.host || !s.username || !password) throw new Error('SFTP is not configured (host, user and password are required).');

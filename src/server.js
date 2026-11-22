@@ -14,6 +14,7 @@ import {
 } from './sync.js';
 import { buildRows } from './feed.js';
 import { parseMappingFile } from './mappingImport.js';
+import { registerOrderRoutes, startOrderPoller, migrateOrders, onFulfillmentWebhook } from './orders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, '..', 'public');
@@ -40,6 +41,8 @@ app.post('/webhooks', express.raw({ type: '*/*', limit: '2mb' }), (req, res) => 
     'inventory_levels/update': () => onInventoryLevelUpdate(payload),
     'products/update': () => onProductUpdate(payload),
     'app/uninstalled': () => deleteSession(shop),
+    'fulfillments/create': () => onFulfillmentWebhook(payload),
+    'fulfillments/update': () => onFulfillmentWebhook(payload),
   }[topic];
   if (handle) handle().catch((e) => log(`webhook ${topic} error:`, e.message));
 });
@@ -82,15 +85,15 @@ api.use(wrap(async (req, res, next) => {
 
 api.get('/bootstrap', wrap(async (req, res) => {
   let session = await getSession();
-  if (!DEV && (!session || session.shop !== req.shop)) {
+  if (!DEV && (!session || session.shop !== req.shop || !String(session.scope || '').includes('write_orders'))) {
     await exchangeToken(req.shop, req.idToken);
     session = await getSession();
   }
   let webhookError = null;
-  if (!DEV && APP_URL && (await kvGet('webhooksFor')) !== APP_URL) {
+  if (!DEV && APP_URL && (await kvGet('webhooksFor:v2')) !== APP_URL) {
     try {
       await registerWebhooks(APP_URL);
-      await kvSet('webhooksFor', APP_URL);
+      await kvSet('webhooksFor:v2', APP_URL);
     } catch (e) {
       webhookError = e.message;
       log('webhook registration failed:', e.message);
@@ -439,10 +442,11 @@ api.post('/settings/test-sftp', wrap(async (req, res) => {
   }
 }));
 
+registerOrderRoutes(api);
 app.use('/api', api);
 
 // Any other page path (App Bridge navigation) -> the app shell.
-app.get(/^\/(overview|skus|import|history|settings)?\/?$/, sendIndex);
+app.get(/^\/(overview|orders|skus|import|history|settings)?\/?$/, sendIndex);
 
 app.use((err, req, res, next) => {
   log('error:', err.stack || err.message);
@@ -450,5 +454,7 @@ app.use((err, req, res, next) => {
 });
 
 await migrate();
+await migrateOrders();
 startScheduler();
+startOrderPoller();
 app.listen(PORT, () => log(`listening on :${PORT}${DEV ? ' (DEV auth bypass)' : ''}`));

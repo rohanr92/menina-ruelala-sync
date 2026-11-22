@@ -219,7 +219,7 @@ export async function fetchVariantByInventoryItem(inventoryItemId) {
 
 /* ---------- Webhooks ---------- */
 
-const TOPICS = ['INVENTORY_LEVELS_UPDATE', 'PRODUCTS_UPDATE', 'APP_UNINSTALLED'];
+const TOPICS = ['INVENTORY_LEVELS_UPDATE', 'PRODUCTS_UPDATE', 'APP_UNINSTALLED', 'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE'];
 
 export async function registerWebhooks(appUrl) {
   const uri = `${appUrl.replace(/\/$/, '')}/webhooks`;
@@ -236,6 +236,7 @@ export async function registerWebhooks(appUrl) {
     }
   }
   const created = [];
+  const failed = [];
   for (const topic of TOPICS) {
     if (have.has(topic)) continue;
     const r = await graphql(
@@ -246,10 +247,11 @@ export async function registerWebhooks(appUrl) {
         }
       }`,
       { topic, sub: { uri, format: 'JSON' } },
-    );
+    ).catch((e) => ({ webhookSubscriptionCreate: { userErrors: [{ message: e.message }] } }));
     const errs = r.webhookSubscriptionCreate.userErrors;
-    if (errs?.length) throw new Error(`Webhook ${topic}: ${errs.map((e) => e.message).join('; ')}`);
-    created.push(topic);
+    if (errs?.length) failed.push(`${topic}: ${errs.map((e) => e.message).join('; ')}`);
+    else created.push(topic);
   }
+  if (failed.length) throw new Error(`Webhooks not created — ${failed.join(' | ')}`);
   return created;
 }

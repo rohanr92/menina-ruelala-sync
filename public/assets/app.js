@@ -86,7 +86,7 @@
   }
 
   /* ---------- routing ---------- */
-  const TABS = ['overview', 'skus', 'import', 'history', 'settings'];
+  const TABS = ['overview', 'skus', 'import', 'history', 'orders', 'settings'];
   function tabFromPath() {
     const p = location.pathname.replace(/^\/|\/$/g, '');
     return TABS.includes(p) ? p : 'overview';
@@ -103,7 +103,7 @@
 
   function render() {
     renderHeaderActions();
-    ({ overview: renderOverview, skus: renderSkus, import: renderImport, history: renderHistory, settings: renderSettings })[state.tab]();
+    ({ overview: renderOverview, skus: renderSkus, import: renderImport, history: renderHistory, settings: renderSettings, orders: () => window.GiltOrders.render() })[state.tab]();
   }
 
   function loading(rows = 3) {
@@ -560,6 +560,8 @@
       catch (err) { toast(err.message, true); busy(btn, false); }
     };
   }
+
+  window.__ui = { view, api, toast, esc, num, plural, fmtDate, ago, until, busy, download, errorBanner, loading, go };
 
   /* ---------- boot ---------- */
   (async () => {
