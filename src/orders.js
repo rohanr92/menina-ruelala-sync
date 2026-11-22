@@ -8,6 +8,14 @@ import {
   shopifyOrderInput, FEDEX_DEFAULTS,
 } from './gilt.js';
 import { buildPackingSlips } from './slip.js';
+import multer from 'multer';
+
+const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
+
+async function slipLogo() {
+  const b64 = await kvGet('slipLogo');
+  return b64 ? Buffer.from(b64, 'base64') : null;
+}
 
 const log = (...a) => console.log(new Date().toISOString(), '[orders]', ...a);
 
@@ -476,10 +484,37 @@ export function registerOrderRoutes(api) {
 
   // Packing slips (PDF), one page per order — same layout as the Radial slip.
   async function sendSlips(res, orders, name) {
-    const buf = await buildPackingSlips(orders);
+    const buf = await buildPackingSlips(orders, { logo: await slipLogo() });
     res.set('Content-Disposition', `attachment; filename="${name}"`);
     res.type('application/pdf').send(buf);
   }
+
+  // Logo printed at the top of packing slips (PNG or JPG you upload).
+  api.get('/gilt/slip-logo', wrap(async (req, res) => {
+    const logo = await slipLogo();
+    if (!logo) return res.status(404).json({ error: 'No logo uploaded' });
+    res.type(logo[0] === 0x89 ? 'image/png' : 'image/jpeg').send(logo);
+  }));
+
+  api.post('/gilt/slip-logo', logoUpload.single('file'), wrap(async (req, res) => {
+    const f = req.file;
+    if (!f) return res.status(400).json({ error: 'No file uploaded' });
+    const isPng = f.buffer.subarray(0, 4).toString('hex') === '89504e47';
+    const isJpg = f.buffer.subarray(0, 3).toString('hex') === 'ffd8ff';
+    if (!isPng && !isJpg) return res.status(422).json({ error: 'Use a PNG or JPG image.' });
+    try {
+      await buildPackingSlips([{ orderNo: 'TEST', lines: [] }], { logo: f.buffer });
+    } catch (e) {
+      return res.status(422).json({ error: `This image can't be used: ${e.message}` });
+    }
+    await kvSet('slipLogo', f.buffer.toString('base64'));
+    res.json({ ok: true });
+  }));
+
+  api.delete('/gilt/slip-logo', wrap(async (req, res) => {
+    await kvSet('slipLogo', '');
+    res.json({ ok: true });
+  }));
 
   api.get('/gilt/orders/:no/slip.pdf', wrap(async (req, res) => {
     const { rows } = await q('SELECT data FROM gilt_orders WHERE order_no=$1', [req.params.no]);

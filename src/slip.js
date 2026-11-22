@@ -22,12 +22,22 @@ function addressLines(a, withPhone) {
 
 export const SLIP_FOOTER = "If there's anything we can help you with, you can contact us at customerservice@gilt.com.";
 
-function drawSlip(doc, o, { title = 'PACKING SLIP', footer = SLIP_FOOTER } = {}) {
+function drawSlip(doc, o, { title = 'PACKING SLIP', footer = SLIP_FOOTER, logo = null } = {}) {
   const L = 34;
   const R = doc.page.width - 34;
   const W = R - L;
 
-  doc.font('Times-Bold').fontSize(22).fillColor('#000').text(title, L, 46, { width: W, align: 'center', characterSpacing: 2 });
+  let logoDrawn = false;
+  if (logo) {
+    try {
+      // Centered, max 130 x 30 pt, just above the top rule — same size and place as on the Radial slip.
+      doc.image(logo, L + (W - 130) / 2, 46, { fit: [130, 30], align: 'center', valign: 'bottom' });
+      logoDrawn = true;
+    } catch {
+      logoDrawn = false; // unreadable image: fall back to the text heading
+    }
+  }
+  if (!logoDrawn) doc.font('Times-Bold').fontSize(22).fillColor('#000').text(title, L, 46, { width: W, align: 'center', characterSpacing: 2 });
   doc.moveTo(L - 6, 84).lineTo(R + 6, 84).lineWidth(1.5).stroke();
 
   // Header block: five columns

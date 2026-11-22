@@ -187,6 +187,16 @@
               <label class="field"><span class="field-label">Payment type</span><input type="text" name="paymentType" value="${esc(f.paymentType)}"></label>
               <label class="field"><span class="field-label">Bill to FedEx account</span><input type="text" name="payerAccountNumber" value="${esc(f.payerAccountNumber)}"></label>
             </div>
+            <div class="divider"></div>
+            <div class="strong" style="margin-bottom:4px">Packing slip logo</div>
+            <div class="help" style="margin-bottom:8px">Printed centered at the top of every packing slip. PNG or JPG, wide and short works best (e.g. 600 × 120 px). Without a logo the slip says "PACKING SLIP".</div>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <div id="g-logo-preview" style="min-width:220px;height:56px;border:1px dashed var(--border-strong);border-radius:8px;display:grid;place-items:center;background:#fff;padding:6px"><span class="subtle small">No logo</span></div>
+              <input type="file" id="g-logo-file" accept="image/png,image/jpeg" hidden>
+              <button type="button" class="btn" id="g-logo-upload">Upload logo</button>
+              <button type="button" class="btn btn-plain btn-critical" id="g-logo-remove" hidden>Remove</button>
+            </div>
+            <div class="divider"></div>
             <div style="display:flex;justify-content:flex-end"><button class="btn btn-primary" type="submit">Save order settings</button></div>
           </form>
         </div>
@@ -254,6 +264,65 @@
     view.querySelector('#g-slips-all').onclick = () => download('/gilt/slips.pdf', 'PackingSlips_RueGilt.pdf');
     view.querySelector('#g-fedex-all').onclick = () => download('/gilt/fedex.xlsx', 'FedEx_RueGilt.xlsx');
     view.querySelector('#g-toggle-settings').onclick = () => { st.showSettings = !st.showSettings; refresh(); };
+    const loadLogo = async () => {
+      const box = view.querySelector('#g-logo-preview');
+      const rm = view.querySelector('#g-logo-remove');
+      if (!box || box.hidden) return;
+      try {
+        const res = await api('/gilt/slip-logo', { raw: true });
+        const url = URL.createObjectURL(await res.blob());
+        box.innerHTML = `<img src="${url}" alt="Packing slip logo" style="max-width:220px;max-height:44px">`;
+        rm.hidden = false;
+      } catch {
+        box.innerHTML = '<span class="subtle small">No logo</span>';
+        rm.hidden = true;
+      }
+    };
+    if (st.showSettings) loadLogo();
+    const fileIn = view.querySelector('#g-logo-file');
+    view.querySelector('#g-logo-upload').onclick = () => fileIn.click();
+    // Trims empty margins and turns near-white background transparent, so a screenshot works as a logo.
+    const trimLogo = (file) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const c = document.createElement('canvas');
+          c.width = img.naturalWidth; c.height = img.naturalHeight;
+          const ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          const d = ctx.getImageData(0, 0, c.width, c.height);
+          let x0 = c.width, y0 = c.height, x1 = -1, y1 = -1;
+          for (let y = 0; y < c.height; y++) {
+            for (let x = 0; x < c.width; x++) {
+              const i = (y * c.width + x) * 4;
+              const light = d.data[i] > 235 && d.data[i + 1] > 235 && d.data[i + 2] > 235;
+              if (light || d.data[i + 3] < 20) { d.data[i + 3] = 0; continue; }
+              if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+            }
+          }
+          if (x1 < 0) return resolve(file);
+          ctx.putImageData(d, 0, 0);
+          const pad = 4;
+          const w = Math.min(c.width, x1 - x0 + 1 + pad * 2), h = Math.min(c.height, y1 - y0 + 1 + pad * 2);
+          const out = document.createElement('canvas');
+          out.width = w; out.height = h;
+          out.getContext('2d').drawImage(c, Math.max(0, x0 - pad), Math.max(0, y0 - pad), w, h, 0, 0, w, h);
+          out.toBlob((b) => resolve(b || file), 'image/png');
+        } catch { resolve(file); }
+      };
+      img.onerror = () => resolve(file);
+      img.src = URL.createObjectURL(file);
+    });
+    fileIn.onchange = async () => {
+      if (!fileIn.files[0]) return;
+      const fd = new FormData(); fd.append('file', await trimLogo(fileIn.files[0]), 'logo.png');
+      try { await api('/gilt/slip-logo', { method: 'POST', body: fd }); toast('Logo saved — it now prints on every packing slip'); loadLogo(); }
+      catch (e) { toast(e.message, true); }
+      fileIn.value = '';
+    };
+    view.querySelector('#g-logo-remove').onclick = async () => {
+      await api('/gilt/slip-logo', { method: 'DELETE' }); toast('Logo removed'); loadLogo();
+    };
     const form = view.querySelector('#g-form');
     form.onsubmit = async (e) => {
       e.preventDefault();

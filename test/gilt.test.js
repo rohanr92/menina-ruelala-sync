@@ -117,3 +117,14 @@ test('packing slip PDF: one page per order', async () => {
   assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
   assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) || []).length, 2);
 });
+
+test('packing slip prints an uploaded logo', async () => {
+  const { buildPackingSlips } = await import('../src/slip.js');
+  // 1x1 transparent PNG stands in for the logo
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+  const { orders } = parseOrderFile(SAMPLE);
+  const pdf = await buildPackingSlips(orders, { logo: png });
+  assert.match(pdf.toString('latin1'), /\/Subtype \/Image/);
+  const plain = await buildPackingSlips(orders);
+  assert.doesNotMatch(plain.toString('latin1'), /\/Subtype \/Image/);
+});
