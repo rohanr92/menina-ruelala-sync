@@ -187,6 +187,10 @@
               <label class="field"><span class="field-label">Payment type</span><input type="text" name="paymentType" value="${esc(f.paymentType)}"></label>
               <label class="field"><span class="field-label">Bill to FedEx account</span><input type="text" name="payerAccountNumber" value="${esc(f.payerAccountNumber)}"></label>
             </div>
+            <div class="row">
+              <label class="field"><span class="field-label">Recipient email (FedEx)</span><input type="text" name="recipientEmail" value="${esc(f.recipientEmail)}"><div class="help">Used for every order, because Rue Gilt order files don't include the customer's email.</div></label>
+              <span></span><span></span>
+            </div>
             <div class="divider"></div>
             <div class="strong" style="margin-bottom:4px">Packing slip logo</div>
             <div class="help" style="margin-bottom:8px">Printed centered at the top of every packing slip. PNG or JPG, wide and short works best (e.g. 600 × 120 px). Without a logo the slip says "PACKING SLIP".</div>
@@ -331,7 +335,7 @@
         autoImport: form.autoImport.checked, autoAsn: form.autoAsn.checked, pollMinutes: Number(v('pollMinutes')),
         getDir: v('getDir'), shipDir: v('shipDir'), tag: v('tag'), priceField: v('priceField'),
         fedex: Object.fromEntries(['senderContactName', 'senderCompany', 'senderContactNumber', 'senderEmail', 'senderLine1', 'senderCity', 'senderState', 'senderPostcode',
-          'packageType', 'packageWeight', 'length', 'width', 'height', 'serviceType', 'paymentType', 'payerAccountNumber'].map((k) => [k, v(k)])),
+          'packageType', 'packageWeight', 'length', 'width', 'height', 'serviceType', 'paymentType', 'payerAccountNumber', 'recipientEmail'].map((k) => [k, v(k)])),
       };
       const btn = form.querySelector('button[type=submit]'); busy(btn, true, 'Saving…');
       try { await api('/gilt/settings', { method: 'PUT', body }); toast('Order settings saved'); } catch (err) { toast(err.message, true); }

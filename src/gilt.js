@@ -143,6 +143,7 @@ export const FEDEX_DEFAULTS = {
   senderState: 'FL',
   senderCity: 'Kendall',
   senderCountry: 'US',
+  recipientEmail: 'meninastep@gmail.com', // FedEx needs an email; Rue Gilt order files don't include the customer's
   packageType: 'YOUR_PACKAGING',
   packageWeight: 1,
   weightUnits: 'LBS',
@@ -181,7 +182,7 @@ export function fedexRow(order, cfg = FEDEX_DEFAULTS) {
     recipientContactName: cut(st.name, 35),
     recipientCompany: cut(st.company, 35),
     recipientContactNumber: cut(st.phone, 15),
-    recipientEmail: '',
+    recipientEmail: cut(st.email || c.recipientEmail, 80),
     recipientLine1: cut(st.line1, 35),
     recipientLine2: cut(st.line2, 35),
     recipientLine3: cut(st.line3, 35),

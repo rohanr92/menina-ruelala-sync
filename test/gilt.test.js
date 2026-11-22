@@ -75,6 +75,7 @@ test('FedEx batch Excel has the template columns and order data', async () => {
   assert.equal(row.getCell(h('recipientLine2')).value, 'Apt 4');
   assert.equal(row.getCell(h('recipientPostcode')).value, '11230');
   assert.equal(row.getCell(h('recipientResidential')).value, 'Y');
+  assert.equal(row.getCell(h('recipientEmail')).value, 'meninastep@gmail.com');
   assert.equal(row.getCell(h('serviceType')).value, 'GROUND_HOME_DELIVERY');
   assert.equal(row.getCell(h('paymentType')).value, 'THIRD_PARTY');
   assert.equal(row.getCell(h('payerAccountNumber')).value, '354042690');
