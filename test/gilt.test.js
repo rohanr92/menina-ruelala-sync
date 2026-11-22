@@ -94,6 +94,10 @@ test('Shopify order: tag, unit cost, no emails, ship-to', () => {
   assert.deepEqual(input.tags, ['Rue Gilt']);
   assert.equal(input.lineItems[0].variantId, 'gid://shopify/ProductVariant/1');
   assert.equal(input.lineItems[0].priceSet.shopMoney.amount, '49.49');
+  assert.equal(input.lineItems[0].requiresShipping, true);
+  assert.equal(input.transactions[0].amountSet.shopMoney.amount, '49.49');
+  assert.equal(input.transactions[0].kind, 'SALE');
+  assert.equal(input.processedAt, undefined, 'order is dated when imported');
   assert.equal(input.poNumber, '1192155713');
   assert.equal(input.email, undefined);
   assert.equal(input.shippingAddress.firstName, 'Jane');

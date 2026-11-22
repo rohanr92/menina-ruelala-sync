@@ -423,6 +423,26 @@ export function registerOrderRoutes(api) {
     res.json(r);
   }));
 
+  // Allows creating the order again after its Shopify order was cancelled.
+  api.post('/gilt/orders/:no/reimport', wrap(async (req, res) => {
+    const { rows } = await q('SELECT * FROM gilt_orders WHERE order_no=$1', [req.params.no]);
+    const o = rows[0];
+    if (!o) return res.status(404).json({ error: 'Not found' });
+    if (o.shopify_order_id) {
+      const d = await graphql(`query($id: ID!) { order(id: $id) { name cancelledAt } }`, { id: `gid://shopify/Order/${o.shopify_order_id}` });
+      if (d.order && !d.order.cancelledAt) {
+        return res.status(422).json({ error: `Cancel ${d.order.name} in Shopify first (More actions → Cancel order, restock the item), then try again.` });
+      }
+    }
+    const sent = await q(`SELECT 1 FROM gilt_asn WHERE order_no=$1 AND status='sent'`, [o.order_no]);
+    if (sent.rows.length) return res.status(422).json({ error: 'A shipment file was already sent for this order.' });
+    await q(`DELETE FROM gilt_asn WHERE order_no=$1`, [o.order_no]);
+    await q(`UPDATE gilt_orders SET status='new', shopify_order_id=NULL, shopify_order_name=NULL, imported_at=NULL, error=NULL WHERE order_no=$1`, [o.order_no]);
+    const r = await importOrder(o.order_no);
+    if (r.error) return res.status(422).json(r);
+    res.json(r);
+  }));
+
   api.post('/gilt/orders/:no/ignore', wrap(async (req, res) => {
     await q(`UPDATE gilt_orders SET status='ignored' WHERE order_no=$1 AND status IN ('new','error','old')`, [req.params.no]);
     res.json({ ok: true });

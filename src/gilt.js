@@ -269,8 +269,10 @@ export function shopifyOrderInput(order, variantBySku, { tag = 'Rue Gilt', price
   const lineItems = order.lines.map((l) => ({
     variantId: variantBySku.get(l.hostSku),
     quantity: l.qty,
+    requiresShipping: true, // physical shoes: Shopify must treat the order as shippable
     priceSet: { shopMoney: { amount: (priceField === 'retail' ? l.retail : l.unitCost).toFixed(2), currencyCode: currency } },
   }));
+  const total = order.lines.reduce((a, l) => a + l.qty * (priceField === 'retail' ? l.retail : l.unitCost), 0);
   const shipBy = usDate(order.shipBy);
   const note = [
     `Rue Gilt order ${order.orderNo}`,
@@ -285,6 +287,11 @@ export function shopifyOrderInput(order, variantBySku, { tag = 'Rue Gilt', price
     poNumber: order.orderNo,
     sourceIdentifier: order.orderNo,
     financialStatus: 'PAID',
+    // Record Rue Gilt's payment so the order shows "Paid $xx.xx" instead of "Paid $0.00".
+    transactions: [{
+      kind: 'SALE', status: 'SUCCESS', gateway: 'Rue Gilt',
+      amountSet: { shopMoney: { amount: total.toFixed(2), currencyCode: currency } },
+    }],
     currency,
     shippingAddress: mailing(order.shipTo),
     billingAddress: mailing(order.billTo || order.shipTo),
@@ -299,6 +306,5 @@ export function shopifyOrderInput(order, variantBySku, { tag = 'Rue Gilt', price
       priceSet: { shopMoney: { amount: '0.00', currencyCode: currency } },
     }],
   };
-  if (order.orderDate) input.processedAt = `${order.orderDate}T12:00:00-05:00`;
   return input;
 }

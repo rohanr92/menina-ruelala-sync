@@ -108,7 +108,9 @@
             ${x.status !== 'sent' ? ` <button class="btn btn-primary btn-sm" data-asnsend="${x.id}">Send to Rue La La</button>` : ''}</td></tr>`).join('')}</tbody>
         </table></div></div>`
         : `<div class="muted small">${o.shopifyOrderId ? 'Created automatically after you fulfill this order in Shopify and add the tracking number.' : 'Import the order first.'}
-            ${o.shopifyOrderId ? ` <button class="btn btn-plain btn-sm" data-chk="${esc(o.orderNo)}">Check Shopify now</button>` : ''}</div>`}
+            ${o.shopifyOrderId ? ` <button class="btn btn-plain btn-sm" data-chk="${esc(o.orderNo)}">Check Shopify now</button>` : ''}</div>
+          ${o.shopifyOrderId ? `<div class="small muted" style="margin-top:10px">Need to create the Shopify order again? Cancel ${esc(o.shopifyOrderName)} in Shopify first (restock the item), then
+            <button class="btn btn-sm" data-reimport="${esc(o.orderNo)}">Re-import order</button></div>` : ''}`}
       </td></tr>`;
     }).join('');
 
@@ -206,6 +208,14 @@
       b.onclick = async () => {
         busy(b, true, 'Creating…');
         try { const r = await api(`/gilt/orders/${encodeURIComponent(b.dataset.import)}/import`, { method: 'POST' }); toast(`Created Shopify order ${r.name}`); }
+        catch (e) { toast(e.message, true); }
+        refresh();
+      };
+    });
+    view.querySelectorAll('[data-reimport]').forEach((b) => {
+      b.onclick = async () => {
+        busy(b, true, 'Re-importing…');
+        try { const r = await api(`/gilt/orders/${encodeURIComponent(b.dataset.reimport)}/reimport`, { method: 'POST' }); toast(`Created Shopify order ${r.name}`); }
         catch (e) { toast(e.message, true); }
         refresh();
       };
