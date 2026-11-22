@@ -157,6 +157,9 @@ export const FEDEX_DEFAULTS = {
   languageCode: 'en',
   paymentType: 'THIRD_PARTY',
   payerAccountNumber: '354042690',
+  labelStockType: 'PAPER_4X6',
+  weightPerPair: true,
+  pickupType: 'USE_SCHEDULED_PICKUP',
 };
 
 const cut = (s, n) => clean(s).slice(0, n);
@@ -193,7 +196,7 @@ export function fedexRow(order, cfg = FEDEX_DEFAULTS) {
     recipientCountry: st.country || 'US',
     packageType: c.packageType,
     numberOfPackages: 1,
-    packageWeight: Number(c.packageWeight) * (c.weightPerUnit ? units : 1),
+    packageWeight: Number(c.packageWeight) * (c.weightPerPair === false ? 1 : units),
     weightUnits: c.weightUnits,
     length: Number(c.length),
     width: Number(c.width),

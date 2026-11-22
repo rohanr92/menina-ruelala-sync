@@ -62,12 +62,15 @@
     if (ov.baselineDone && c.old && !waitingImport && !waitingShip && !c.shipped) {
       banners.push(`<div class="banner info"><div class="icon">i</div><div class="grow"><div class="banner-title">${plural(c.old, 'earlier order')} found in ${esc(s.getDir)}</div><div>These were already there before the app started, so they are <b>not</b> imported. Open <b>Earlier orders</b> and click <b>Import</b> on the ones you still need to ship (e.g. today's order).</div></div><button class="btn" data-f="old">Earlier orders</button></div>`);
     }
+    if (!ov.fedex?.configured) banners.push(`<div class="banner info"><div class="icon">i</div><div class="grow"><div class="banner-title">FedEx labels are off</div><div>Add FEDEX_API_KEY, FEDEX_SECRET_KEY and FEDEX_ACCOUNT_NUMBER in Railway → Variables to create labels from your FedEx account.</div></div></div>`);
+    else if (ov.fedex.env !== 'production') banners.push(`<div class="banner warning"><div class="icon">!</div><div class="grow"><div class="banner-title">FedEx TEST mode</div><div>Labels are created in FedEx's test system — they are <b>not</b> real and can't be shipped. Set FEDEX_ENV=production in Railway with your production keys for real labels.</div></div></div>`);
     if (!ov.lastPoll) banners.push(`<div class="banner info"><div class="icon">i</div><div class="grow"><div class="banner-title">Not checked yet</div><div>Click <b>Check ${esc(s.getDir)} now</b> to read the order files. Nothing is created in Shopify until you import an order.</div></div></div>`);
 
     const filters = [['open', 'Open'], ['new', 'Needs import'], ['imported', 'Waiting to ship'], ['shipped', 'Shipped'], ['old', 'Earlier orders'], ['all', 'All']];
     const rows = orders.map((o) => {
       const missing = o.lines.filter((l) => l.inShopify === false).length;
       const canImport = ['new', 'error', 'old', 'ignored'].includes(o.status);
+      const canLabel = ov.fedex?.configured && o.shopifyOrderId && !o.label && o.status === 'imported';
       const pendingAsn = o.shipments.filter((a) => a.status !== 'sent').length;
       const isOpen = st.open.has(o.orderNo);
       const main = `<tr class="clickable" data-row="${esc(o.orderNo)}">
@@ -77,11 +80,12 @@
         <td>${o.lines.map((l) => `<div><span class="strong">${esc(l.vendorSku)}</span> <span class="mono small">${esc(l.hostSku)}</span> × ${l.qty}${l.inShopify === false ? ' <span class="badge critical">Not in Shopify</span>' : ''}</div>`).join('')}</td>
         <td class="num">${money(o.total)}</td>
         <td>${o.shopifyOrderName ? `<a href="${adminUrl(o.shopifyOrderId)}" target="_top">${esc(o.shopifyOrderName)}</a>` : '<span class="subtle">—</span>'}</td>
-        <td>${badge(o.status)}${pendingAsn ? '<div class="sub"><span class="badge attention">Shipment file ready</span></div>' : ''}</td>
+        <td>${badge(o.status)}${o.label ? `<div class="sub">FedEx <span class="mono">${esc(o.label.tracking)}</span>${o.label.env !== 'production' ? ' <span class="badge warning">TEST</span>' : ''}</div>` : ''}${o.labelError && !o.label ? '<div class="sub"><span class="badge critical">Label problem</span></div>' : ''}${pendingAsn ? '<div class="sub"><span class="badge attention">Shipment file ready</span></div>' : ''}</td>
         <td class="num" style="white-space:nowrap">
           ${canImport ? `<button class="btn btn-primary btn-sm" data-import="${esc(o.orderNo)}" ${missing ? 'disabled title="Fix the missing SKU first"' : ''}>${o.status === 'error' ? 'Retry' : 'Import'}</button>` : ''}
+          ${canLabel ? `<button class="btn btn-primary btn-sm" data-label="${esc(o.orderNo)}">${o.labelError ? 'Retry label' : 'Create label'}</button>` : ''}
+          ${o.label ? `<button class="btn btn-sm" data-labelpdf="${esc(o.orderNo)}" data-name="FedEx_${esc(o.label.tracking)}.pdf">Label</button>` : ''}
           <button class="btn btn-sm" data-slip="${esc(o.orderNo)}" title="Packing slip (PDF)">Packing slip</button>
-          <button class="btn btn-sm" data-xlsx="${esc(o.orderNo)}" title="FedEx batch upload file">FedEx Excel</button>
         </td>
       </tr>`;
       if (!isOpen) return main;
@@ -100,6 +104,17 @@
           <thead><tr><th>Vendor SKU</th><th>Host SKU</th><th>Description</th><th class="num">Qty</th><th class="num">Unit cost</th><th class="num">Retail</th><th>Shopify</th></tr></thead>
           <tbody>${o.lines.map((l) => `<tr><td class="strong">${esc(l.vendorSku)}</td><td class="mono">${esc(l.hostSku)}</td><td>${esc(l.description)}</td><td class="num">${l.qty}</td><td class="num">${money(l.unitCost)}</td><td class="num">${money(l.retail)}</td><td>${l.inShopify === false ? '<span class="badge critical">Not found</span>' : '<span class="badge success">Found</span>'}</td></tr>`).join('')}</tbody>
         </table></div></div>
+        <div class="strong" style="margin-bottom:6px">FedEx label</div>
+        ${o.labelError ? `<div class="banner critical" style="margin-bottom:10px"><div class="icon">!</div><div class="grow"><div class="banner-title">Label problem</div><div>${esc(o.labelError)}</div></div>${canLabel ? `<button class="btn" data-label="${esc(o.orderNo)}">Try again</button>` : ''}</div>` : ''}
+        ${o.label ? `<div class="card" style="margin-bottom:12px"><div class="card-body" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+            <div style="flex:1;min-width:220px"><div><a class="mono strong" href="https://www.fedex.com/fedextrack/?trknbr=${esc(o.label.tracking)}" target="_blank" rel="noopener">${esc(o.label.tracking)}</a> ${o.label.env !== 'production' ? '<span class="badge warning">TEST label</span>' : '<span class="badge success">Live</span>'}</div>
+              <div class="sub">${esc((o.label.service || '').replace(/_/g, ' '))} · billed Third Party ${esc(s.fedex.payerAccountNumber)} · ${U().fmtDate(o.label.created_at)}</div></div>
+            <button class="btn btn-sm" data-labelpdf="${esc(o.orderNo)}" data-name="FedEx_${esc(o.label.tracking)}.pdf">Download label</button>
+            <button class="btn btn-sm" data-docs="${esc(o.orderNo)}">Label + packing slip</button>
+            ${o.shipments.some((x) => x.status === 'sent' && x.tracking === o.label.tracking) ? '' : `<button class="btn btn-plain btn-sm btn-critical" data-void="${esc(o.orderNo)}">Void label</button>`}
+          </div></div>`
+        : `<div class="muted small" style="margin-bottom:12px">${!ov.fedex?.configured ? 'FedEx keys not added yet.' : o.shopifyOrderId ? (o.status === 'imported' ? 'No label yet.' : 'This order was fulfilled outside the app.') : 'Import the order first.'}
+            <button class="btn btn-plain btn-sm" data-xlsx="${esc(o.orderNo)}">FedEx Excel instead</button></div>`}
         <div class="strong" style="margin-bottom:6px">Shipment files to Rue La La (${esc(s.shipDir)})</div>
         ${o.shipments.length ? `<div class="card"><div class="table-wrap"><table>
           <thead><tr><th>Tracking</th><th>File</th><th>Status</th><th></th></tr></thead>
@@ -127,7 +142,7 @@
           <div class="tile-meta">${s.autoImport ? 'New orders import automatically' : 'Auto-import is off'}</div></div>
         <div class="card tile"><div class="tile-label"><span class="dot ${waitingShip ? 'warn' : 'ok'}"></span>Waiting to ship</div>
           <div class="tile-value">${num(waitingShip)}</div>
-          <div class="tile-meta">Tagged "${esc(s.tag)}" in Shopify</div></div>
+          <div class="tile-meta">${ov.fedex?.configured ? `${plural(ov.labelsToday || 0, 'FedEx label')} today · ${s.autoLabel ? 'auto' : 'manual'}` : `Tagged "${esc(s.tag)}" in Shopify`}</div></div>
         <div class="card tile"><div class="tile-label"><span class="dot ${ov.asnWaiting ? 'warn' : 'ok'}"></span>Shipment files</div>
           <div class="tile-value">${ov.asnWaiting ? `${num(ov.asnWaiting)} to send` : 'Up to date'}</div>
           <div class="tile-meta">${s.autoAsn ? `Sent automatically to ${esc(s.shipDir)}` : 'Auto-send is off — review & send'}</div></div>
@@ -137,8 +152,8 @@
         <div class="filters">
           <div class="pills">${filters.map(([k, l]) => `<button class="pill ${st.filter === k ? 'active' : ''}" data-f="${k}">${l}</button>`).join('')}</div>
           <span style="flex:1"></span>
+          <button class="btn" id="g-print-today" ${ov.labelsToday ? '' : 'disabled'} title="Every FedEx label created today, each followed by its packing slip">Print today's labels + slips</button>
           <button class="btn" id="g-slips-all" ${waitingShip ? '' : 'disabled'} title="One page per order, all orders waiting to ship">All packing slips</button>
-          <button class="btn" id="g-fedex-all" ${waitingShip ? '' : 'disabled'} title="All orders waiting to ship, one row each">All-orders FedEx Excel</button>
           <button class="btn btn-primary" id="g-check">Check ${esc(s.getDir)} now</button>
         </div>
         ${orders.length ? `<div class="table-wrap"><table>
@@ -152,6 +167,7 @@
         <div class="card-body" ${st.showSettings ? '' : 'hidden'}>
           <form id="g-form" autocomplete="off">
             <label class="check"><input type="checkbox" name="autoImport" ${s.autoImport ? 'checked' : ''}><span><span class="t">Import new orders automatically</span><div class="help">Every new order in ${esc(s.getDir)} becomes a Shopify order tagged "${esc(s.tag)}" and reduces stock. Earlier orders are never imported automatically.</div></span></label>
+            <label class="check"><input type="checkbox" name="autoLabel" ${s.autoLabel ? 'checked' : ''}><span><span class="t">Create FedEx labels automatically</span><div class="help">Right after a new order is imported: label from your FedEx account, billed Third Party to ${esc(s.fedex.payerAccountNumber)}, and the Shopify order is fulfilled with the tracking number.</div></span></label>
             <label class="check"><input type="checkbox" name="autoAsn" ${s.autoAsn ? 'checked' : ''}><span><span class="t">Send shipment files automatically</span><div class="help">When you fulfill an order in Shopify with a tracking number, the shipment CSV is uploaded to ${esc(s.shipDir)} right away. Off: it waits here for you to click Send.</div></span></label>
             <div class="divider"></div>
             <div class="row">
@@ -188,6 +204,11 @@
               <label class="field"><span class="field-label">Bill to FedEx account</span><input type="text" name="payerAccountNumber" value="${esc(f.payerAccountNumber)}"></label>
             </div>
             <div class="row">
+              <label class="field"><span class="field-label">Label size</span><select name="labelStockType">${[['PAPER_4X6', '4×6 PDF (label paper)'], ['STOCK_4X6', '4×6 thermal printer'], ['PAPER_85X11_TOP_HALF_LABEL', 'Letter paper, label on top half']].map(([v, l]) => `<option value="${v}" ${f.labelStockType === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+              <label class="check" style="margin-top:24px"><input type="checkbox" name="weightPerPair" ${f.weightPerPair !== false ? 'checked' : ''}><span><span class="t">Weight is per pair</span><div class="help">2 pairs in one box = 2 × the weight above.</div></span></label>
+              <div class="field" style="margin-top:22px"><button type="button" class="btn" id="g-fedex-test">Test FedEx connection</button><div class="help" id="g-fedex-result">${ov.fedex?.configured ? `Keys added · ${ov.fedex.env}` : 'Keys not added'}</div></div>
+            </div>
+            <div class="row">
               <label class="field"><span class="field-label">Recipient email (FedEx)</span><input type="text" name="recipientEmail" value="${esc(f.recipientEmail)}"><div class="help">Used for every order, because Rue Gilt order files don't include the customer's email.</div></label>
               <span></span><span></span>
             </div>
@@ -210,7 +231,7 @@
   }
 
   function bind() {
-    const { view, api, toast, busy, download } = U();
+    const { view, api, toast, busy, download, esc } = U();
     view.querySelectorAll('[data-f]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); st.filter = b.dataset.f; render(); }; });
     view.querySelectorAll('tr[data-row]').forEach((tr) => {
       tr.onclick = (e) => {
@@ -224,6 +245,27 @@
       b.onclick = async () => {
         busy(b, true, 'Creating…');
         try { const r = await api(`/gilt/orders/${encodeURIComponent(b.dataset.import)}/import`, { method: 'POST' }); toast(`Created Shopify order ${r.name}`); }
+        catch (e) { toast(e.message, true); }
+        refresh();
+      };
+    });
+    view.querySelectorAll('[data-label]').forEach((b) => {
+      b.onclick = async () => {
+        busy(b, true, 'Creating label…');
+        try {
+          const r = await api(`/gilt/orders/${encodeURIComponent(b.dataset.label)}/label`, { method: 'POST' });
+          toast(`FedEx label ${r.tracking} created — order fulfilled in Shopify`);
+        } catch (e) { toast(e.message, true); }
+        refresh();
+      };
+    });
+    view.querySelectorAll('[data-labelpdf]').forEach((b) => { b.onclick = () => download(`/gilt/orders/${encodeURIComponent(b.dataset.labelpdf)}/label.pdf`, b.dataset.name); });
+    view.querySelectorAll('[data-docs]').forEach((b) => { b.onclick = () => download(`/gilt/orders/${encodeURIComponent(b.dataset.docs)}/documents.pdf`, `RueGilt_${b.dataset.docs}.pdf`); });
+    view.querySelectorAll('[data-void]').forEach((b) => {
+      b.onclick = async () => {
+        if (!window.confirm('Void this FedEx label and un-fulfill the Shopify order?')) return;
+        busy(b, true, 'Voiding…');
+        try { await api(`/gilt/orders/${encodeURIComponent(b.dataset.void)}/label/void`, { method: 'POST' }); toast('Label voided'); }
         catch (e) { toast(e.message, true); }
         refresh();
       };
@@ -266,7 +308,7 @@
       render();
     };
     view.querySelector('#g-slips-all').onclick = () => download('/gilt/slips.pdf', 'PackingSlips_RueGilt.pdf');
-    view.querySelector('#g-fedex-all').onclick = () => download('/gilt/fedex.xlsx', 'FedEx_RueGilt.xlsx');
+    view.querySelector('#g-print-today').onclick = () => download('/gilt/labels.pdf?slips=1', 'RueGilt_labels_and_slips.pdf');
     view.querySelector('#g-toggle-settings').onclick = () => { st.showSettings = !st.showSettings; refresh(); };
     const loadLogo = async () => {
       const box = view.querySelector('#g-logo-preview');
@@ -327,16 +369,26 @@
     view.querySelector('#g-logo-remove').onclick = async () => {
       await api('/gilt/slip-logo', { method: 'DELETE' }); toast('Logo removed'); loadLogo();
     };
+    view.querySelector('#g-fedex-test').onclick = async (e) => {
+      const out = view.querySelector('#g-fedex-result');
+      busy(e.currentTarget, true, 'Testing…');
+      try {
+        const r = await api('/gilt/fedex/test', { method: 'POST' });
+        out.innerHTML = r.ok ? `<span class="badge success">Connected</span> ${esc(r.env)} · account ${esc(r.account)}` : `<span class="badge critical">Failed</span> ${esc(r.error)}`;
+      } catch (err) { out.textContent = err.message; }
+      busy(e.currentTarget, false);
+    };
     const form = view.querySelector('#g-form');
     form.onsubmit = async (e) => {
       e.preventDefault();
       const v = (n) => form.elements[n].value;
       const body = {
-        autoImport: form.autoImport.checked, autoAsn: form.autoAsn.checked, pollMinutes: Number(v('pollMinutes')),
+        autoImport: form.autoImport.checked, autoAsn: form.autoAsn.checked, autoLabel: form.autoLabel.checked, pollMinutes: Number(v('pollMinutes')),
         getDir: v('getDir'), shipDir: v('shipDir'), tag: v('tag'), priceField: v('priceField'),
         fedex: Object.fromEntries(['senderContactName', 'senderCompany', 'senderContactNumber', 'senderEmail', 'senderLine1', 'senderCity', 'senderState', 'senderPostcode',
-          'packageType', 'packageWeight', 'length', 'width', 'height', 'serviceType', 'paymentType', 'payerAccountNumber', 'recipientEmail'].map((k) => [k, v(k)])),
+          'packageType', 'packageWeight', 'length', 'width', 'height', 'serviceType', 'paymentType', 'payerAccountNumber', 'recipientEmail', 'labelStockType'].map((k) => [k, v(k)])),
       };
+      body.fedex.weightPerPair = form.weightPerPair.checked;
       const btn = form.querySelector('button[type=submit]'); busy(btn, true, 'Saving…');
       try { await api('/gilt/settings', { method: 'PUT', body }); toast('Order settings saved'); } catch (err) { toast(err.message, true); }
       refresh();

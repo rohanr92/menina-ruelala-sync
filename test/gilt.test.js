@@ -129,3 +129,24 @@ test('packing slip prints an uploaded logo', async () => {
   const plain = await buildPackingSlips(orders);
   assert.doesNotMatch(plain.toString('latin1'), /\/Subtype \/Image/);
 });
+
+test('FedEx label request: always Third Party 354042690, residential, refs, weight per pair', async () => {
+  const { shipmentRequest } = await import('../src/fedex.js');
+  const { FEDEX_DEFAULTS } = await import('../src/gilt.js');
+  const { orders } = parseOrderFile(TWO);
+  const cfg = { fedex: { ...FEDEX_DEFAULTS } };
+  const r = shipmentRequest(orders[1], cfg, '123456260');
+  const rs = r.requestedShipment;
+  assert.equal(r.accountNumber.value, '123456260');
+  assert.equal(rs.shippingChargesPayment.paymentType, 'THIRD_PARTY');
+  assert.equal(rs.shippingChargesPayment.payor.responsibleParty.accountNumber.value, '354042690');
+  assert.equal(rs.serviceType, 'GROUND_HOME_DELIVERY');
+  assert.equal(rs.recipients[0].address.residential, true);
+  assert.equal(rs.recipients[0].address.postalCode, '11230');
+  assert.equal(rs.requestedPackageLineItems[0].weight.value, 3, '3 pairs x 1 lb');
+  assert.equal(rs.requestedPackageLineItems[0].customerReferences[0].value, '1192155799');
+  assert.equal(rs.labelSpecification.labelStockType, 'PAPER_4X6');
+  assert.equal(rs.shipper.address.postalCode, '33156');
+  // Never ships without the third-party account
+  assert.throws(() => shipmentRequest(orders[0], { fedex: { ...FEDEX_DEFAULTS, payerAccountNumber: '' } }, '1'), /Third-party billing/);
+});

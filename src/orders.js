@@ -8,6 +8,8 @@ import {
   shopifyOrderInput, FEDEX_DEFAULTS,
 } from './gilt.js';
 import { buildPackingSlips } from './slip.js';
+import { createLabel, cancelLabel, fedexConfigured, fedexEnv, testFedexLogin } from './fedex.js';
+import { PDFDocument } from 'pdf-lib';
 import multer from 'multer';
 
 const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
@@ -22,6 +24,7 @@ const log = (...a) => console.log(new Date().toISOString(), '[orders]', ...a);
 export const ORDER_DEFAULTS = {
   autoImport: false,
   autoAsn: false,
+  autoLabel: false,
   pollMinutes: 2,
   getDir: '/Live/Get',
   shipDir: '/Live/Put/Ship',
@@ -67,6 +70,21 @@ export async function migrateOrders() {
       shipped_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS gilt_orders_status_idx ON gilt_orders (status);
+    ALTER TABLE gilt_orders ADD COLUMN IF NOT EXISTS label_error TEXT;
+    ALTER TABLE gilt_orders ADD COLUMN IF NOT EXISTS label_attempted_at TIMESTAMPTZ;
+    CREATE TABLE IF NOT EXISTS gilt_labels (
+      id SERIAL PRIMARY KEY,
+      order_no TEXT NOT NULL,
+      tracking TEXT NOT NULL,
+      service TEXT,
+      label_pdf TEXT NOT NULL,
+      env TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      fulfillment_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      voided_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS gilt_labels_order_idx ON gilt_labels (order_no);
     CREATE TABLE IF NOT EXISTS gilt_asn (
       id SERIAL PRIMARY KEY,
       order_no TEXT NOT NULL,
@@ -158,6 +176,18 @@ export function pollInbox({ trigger = 'schedule' } = {}) {
         for (const r of rows) {
           const res = await importOrderInner(r.order_no, cfg).catch((e) => ({ error: e.message }));
           if (res?.error) result.errors.push(`${r.order_no}: ${res.error}`); else result.imported++;
+        }
+      }
+      if (cfg.autoLabel && fedexConfigured()) {
+        const { rows } = await q(
+          `SELECT o.order_no FROM gilt_orders o
+           WHERE o.status = 'imported' AND o.label_attempted_at IS NULL AND o.imported_at > now() - interval '7 days'
+             AND NOT EXISTS (SELECT 1 FROM gilt_labels l WHERE l.order_no = o.order_no AND l.status = 'active')
+           ORDER BY o.imported_at`,
+        );
+        for (const r of rows) {
+          const res = await labelOrderInner(r.order_no, cfg).catch((e) => ({ error: e.message }));
+          if (res?.error) result.errors.push(`${r.order_no} label: ${res.error}`); else result.labeled = (result.labeled || 0) + 1;
         }
       }
       await checkShipmentsInner(null, cfg).catch((e) => result.errors.push(`Shipments: ${e.message}`));
@@ -332,6 +362,97 @@ export async function onFulfillmentWebhook(payload) {
   setTimeout(() => checkShipments(rows[0].order_no).catch((e) => log('shipment check failed:', e.message)), 5000);
 }
 
+/* ---------- 4. FedEx label + Shopify fulfillment ---------- */
+
+async function openFulfillmentOrders(shopifyOrderId) {
+  const d = await graphql(
+    `query($id: ID!) { order(id: $id) { name cancelledAt fulfillmentOrders(first: 10) { nodes { id status } } } }`,
+    { id: `gid://shopify/Order/${shopifyOrderId}` },
+  );
+  if (!d.order) throw new Error('Shopify order not found.');
+  if (d.order.cancelledAt) throw new Error(`${d.order.name} is cancelled in Shopify.`);
+  return { name: d.order.name, open: d.order.fulfillmentOrders.nodes.filter((f) => ['OPEN', 'IN_PROGRESS'].includes(f.status)) };
+}
+
+async function labelOrderInner(orderNo, cfg) {
+  await q(`UPDATE gilt_orders SET label_attempted_at = now() WHERE order_no = $1`, [orderNo]);
+  const { rows } = await q('SELECT * FROM gilt_orders WHERE order_no=$1', [orderNo]);
+  const o = rows[0];
+  const fail = async (msg) => {
+    await q(`UPDATE gilt_orders SET label_error=$2 WHERE order_no=$1`, [orderNo, msg]);
+    log(`label ${orderNo} failed: ${msg}`);
+    return { error: msg };
+  };
+  if (!o) return { error: 'Order not found.' };
+  if (!o.shopify_order_id) return fail('Import the order into Shopify first.');
+  const active = await q(`SELECT tracking FROM gilt_labels WHERE order_no=$1 AND status='active'`, [orderNo]);
+  if (active.rows[0]) return { error: `Already has FedEx label ${active.rows[0].tracking}.` };
+
+  let fos;
+  try { fos = await openFulfillmentOrders(o.shopify_order_id); } catch (e) { return fail(e.message); }
+  if (!fos.open.length) return fail(`${fos.name} is already fulfilled in Shopify — no label created.`);
+
+  let label;
+  try { label = await createLabel(o.data, cfg); } catch (e) { return fail(e.message); }
+  const ins = await q(
+    `INSERT INTO gilt_labels (order_no, tracking, service, label_pdf, env) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [orderNo, label.tracking, label.service, label.labelPdf.toString('base64'), fedexEnv()],
+  );
+  log(`label ${orderNo}: ${label.tracking} (${fedexEnv()})`);
+
+  // Fulfill in Shopify with the tracking number (no email to the customer).
+  const d = await graphql(
+    `mutation($f: FulfillmentInput!) {
+      fulfillmentCreate(fulfillment: $f) { fulfillment { id } userErrors { field message } }
+    }`,
+    {
+      f: {
+        lineItemsByFulfillmentOrder: fos.open.map((f) => ({ fulfillmentOrderId: f.id })),
+        notifyCustomer: false,
+        trackingInfo: { company: 'FedEx', number: label.tracking, url: `https://www.fedex.com/fedextrack/?trknbr=${label.tracking}` },
+      },
+    },
+  ).catch((e) => ({ fulfillmentCreate: { userErrors: [{ message: e.message }] } }));
+  const errs = d.fulfillmentCreate.userErrors;
+  if (errs?.length) {
+    return fail(`Label ${label.tracking} was created, but Shopify fulfillment failed: ${errs.map((e) => e.message).join('; ')}. Fulfill ${fos.name} in Shopify with this tracking number.`);
+  }
+  await q(`UPDATE gilt_labels SET fulfillment_id=$2 WHERE id=$1`, [ins.rows[0].id, d.fulfillmentCreate.fulfillment.id]);
+  await q(`UPDATE gilt_orders SET label_error=NULL WHERE order_no=$1`, [orderNo]);
+  await checkShipmentsInner(orderNo, cfg).catch((e) => log('shipment file after label failed:', e.message));
+  return { ok: true, tracking: label.tracking, alerts: label.alerts };
+}
+
+export const labelOrder = (orderNo) => exclusive(async () => labelOrderInner(orderNo, await getOrderSettings()));
+
+async function voidLabelInner(orderNo) {
+  const { rows } = await q(`SELECT * FROM gilt_labels WHERE order_no=$1 AND status='active' ORDER BY id DESC LIMIT 1`, [orderNo]);
+  const l = rows[0];
+  if (!l) return { error: 'No active label.' };
+  const sent = await q(`SELECT 1 FROM gilt_asn WHERE order_no=$1 AND tracking=$2 AND status='sent'`, [orderNo, l.tracking]);
+  if (sent.rows.length) return { error: 'The shipment file with this tracking number was already sent to Rue La La, so the label can\'t be voided here.' };
+  await cancelLabel(l.tracking);
+  if (l.fulfillment_id) {
+    await graphql(`mutation($id: ID!) { fulfillmentCancel(id: $id) { userErrors { message } } }`, { id: l.fulfillment_id }).catch(() => {});
+  }
+  await q(`DELETE FROM gilt_asn WHERE order_no=$1 AND tracking=$2 AND status <> 'sent'`, [orderNo, l.tracking]);
+  await q(`UPDATE gilt_labels SET status='voided', voided_at=now() WHERE id=$1`, [l.id]);
+  await q(`UPDATE gilt_orders SET status='imported', label_error=NULL WHERE order_no=$1 AND status IN ('imported','partial','shipped')`, [orderNo]);
+  log(`label ${l.tracking} voided for ${orderNo}`);
+  return { ok: true };
+}
+
+export const voidLabel = (orderNo) => exclusive(() => voidLabelInner(orderNo));
+
+async function mergePdfs(buffers) {
+  const out = await PDFDocument.create();
+  for (const b of buffers) {
+    const src = await PDFDocument.load(b);
+    for (const p of await out.copyPages(src, src.getPageIndices())) out.addPage(p);
+  }
+  return Buffer.from(await out.save());
+}
+
 /* ---------- poller ---------- */
 
 export function startOrderPoller() {
@@ -373,6 +494,7 @@ function summarize(r, skuSet) {
     createdAt: r.created_at,
     importedAt: r.imported_at,
     shippedAt: r.shipped_at,
+    labelError: r.label_error,
   };
 }
 
@@ -398,6 +520,8 @@ export function registerOrderRoutes(api) {
       lastError: err || null,
       baselineDone: (await kvGet('ordersBaselineDone')) === '1',
       shopHandle: session?.shop?.replace(/\.myshopify\.com$/, '') || null,
+      fedex: { configured: fedexConfigured(), env: fedexEnv() },
+      labelsToday: (await q(`SELECT count(*)::int AS n FROM gilt_labels WHERE status='active' AND (created_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date`)).rows[0].n,
     });
   }));
 
@@ -423,7 +547,20 @@ export function registerOrderRoutes(api) {
     );
     const asnBy = {};
     for (const a of asn.rows) (asnBy[a.order_no] ||= []).push(a);
-    res.json({ orders: rows.map((r) => ({ ...summarize(r, skuSet), shipments: asnBy[r.order_no] || [] })) });
+    const labels = await q(
+      `SELECT id, order_no, tracking, service, env, status, created_at FROM gilt_labels WHERE order_no = ANY($1) ORDER BY id`,
+      [rows.map((r) => r.order_no)],
+    );
+    const labelsBy = {};
+    for (const l of labels.rows) (labelsBy[l.order_no] ||= []).push(l);
+    res.json({
+      orders: rows.map((r) => ({
+        ...summarize(r, skuSet),
+        shipments: asnBy[r.order_no] || [],
+        labels: labelsBy[r.order_no] || [],
+        label: (labelsBy[r.order_no] || []).filter((l) => l.status === 'active').at(-1) || null,
+      })),
+    });
   }));
 
   api.post('/gilt/orders/:no/import', wrap(async (req, res) => {
@@ -443,6 +580,8 @@ export function registerOrderRoutes(api) {
         return res.status(422).json({ error: `Cancel ${d.order.name} in Shopify first (More actions → Cancel order, restock the item), then try again.` });
       }
     }
+    const lab = await q(`SELECT tracking FROM gilt_labels WHERE order_no=$1 AND status='active'`, [o.order_no]);
+    if (lab.rows.length) return res.status(422).json({ error: `Void FedEx label ${lab.rows[0].tracking} first.` });
     const sent = await q(`SELECT 1 FROM gilt_asn WHERE order_no=$1 AND status='sent'`, [o.order_no]);
     if (sent.rows.length) return res.status(422).json({ error: 'A shipment file was already sent for this order.' });
     await q(`DELETE FROM gilt_asn WHERE order_no=$1`, [o.order_no]);
@@ -532,6 +671,65 @@ export function registerOrderRoutes(api) {
     await sendSlips(res, rows.map((r) => r.data), `PackingSlips_RueGilt_${day}_${rows.length}orders.pdf`);
   }));
 
+  // FedEx labels
+  api.post('/gilt/fedex/test', wrap(async (req, res) => {
+    try { res.json(await testFedexLogin()); } catch (e) { res.json({ ok: false, error: e.message }); }
+  }));
+
+  api.post('/gilt/orders/:no/label', wrap(async (req, res) => {
+    const r = await labelOrder(req.params.no);
+    if (r.error) return res.status(422).json(r);
+    res.json(r);
+  }));
+
+  api.post('/gilt/orders/:no/label/void', wrap(async (req, res) => {
+    try {
+      const r = await voidLabel(req.params.no);
+      if (r.error) return res.status(422).json(r);
+      res.json(r);
+    } catch (e) { res.status(422).json({ error: e.message }); }
+  }));
+
+  api.get('/gilt/orders/:no/label.pdf', wrap(async (req, res) => {
+    const { rows } = await q(`SELECT tracking, label_pdf FROM gilt_labels WHERE order_no=$1 AND status='active' ORDER BY id DESC LIMIT 1`, [req.params.no]);
+    if (!rows[0]) return res.status(404).json({ error: 'No FedEx label for this order yet.' });
+    res.set('Content-Disposition', `attachment; filename="FedEx_${rows[0].tracking}_${req.params.no}.pdf"`);
+    res.type('application/pdf').send(Buffer.from(rows[0].label_pdf, 'base64'));
+  }));
+
+  // Label + packing slip for one order, ready to print together
+  api.get('/gilt/orders/:no/documents.pdf', wrap(async (req, res) => {
+    const [o, l] = await Promise.all([
+      q('SELECT data FROM gilt_orders WHERE order_no=$1', [req.params.no]),
+      q(`SELECT label_pdf FROM gilt_labels WHERE order_no=$1 AND status='active' ORDER BY id DESC LIMIT 1`, [req.params.no]),
+    ]);
+    if (!o.rows[0]) return res.status(404).json({ error: 'Not found' });
+    const parts = [];
+    if (l.rows[0]) parts.push(Buffer.from(l.rows[0].label_pdf, 'base64'));
+    parts.push(await buildPackingSlips([o.rows[0].data], { logo: await slipLogo() }));
+    res.set('Content-Disposition', `attachment; filename="RueGilt_${req.params.no}_label_and_slip.pdf"`);
+    res.type('application/pdf').send(await mergePdfs(parts));
+  }));
+
+  // All of today's labels (Eastern time) in one PDF, optionally with packing slips
+  api.get('/gilt/labels.pdf', wrap(async (req, res) => {
+    const { rows } = await q(
+      `SELECT l.order_no, l.label_pdf, o.data FROM gilt_labels l JOIN gilt_orders o ON o.order_no = l.order_no
+       WHERE l.status='active' AND (l.created_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date
+       ORDER BY l.id`,
+    );
+    if (!rows.length) return res.status(404).json({ error: 'No FedEx labels created today.' });
+    const parts = [];
+    const logo = req.query.slips ? await slipLogo() : null;
+    for (const r of rows) {
+      parts.push(Buffer.from(r.label_pdf, 'base64'));
+      if (req.query.slips) parts.push(await buildPackingSlips([r.data], { logo }));
+    }
+    const day = new Date().toISOString().slice(0, 10);
+    res.set('Content-Disposition', `attachment; filename="RueGilt_${req.query.slips ? 'labels_and_slips' : 'labels'}_${day}.pdf"`);
+    res.type('application/pdf').send(await mergePdfs(parts));
+  }));
+
   api.get('/gilt/asn/:id/csv', wrap(async (req, res) => {
     const { rows } = await q('SELECT filename, csv FROM gilt_asn WHERE id=$1', [req.params.id]);
     if (!rows[0]) return res.status(404).json({ error: 'Not found' });
@@ -561,13 +759,13 @@ export function registerOrderRoutes(api) {
     const cur = await getOrderSettings();
     const b = req.body || {};
     const next = structuredClone(cur);
-    for (const k of ['autoImport', 'autoAsn']) if (typeof b[k] === 'boolean') next[k] = b[k];
+    for (const k of ['autoImport', 'autoAsn', 'autoLabel']) if (typeof b[k] === 'boolean') next[k] = b[k];
     if (b.pollMinutes !== undefined) next.pollMinutes = Math.min(60, Math.max(1, Number(b.pollMinutes) || 2));
     for (const k of ['getDir', 'shipDir', 'tag']) if (typeof b[k] === 'string' && b[k].trim()) next[k] = b[k].trim();
     if (['unitCost', 'retail'].includes(b.priceField)) next.priceField = b.priceField;
     if (b.fedex && typeof b.fedex === 'object') {
       for (const [k, v] of Object.entries(b.fedex)) {
-        if (k in FEDEX_DEFAULTS && k !== 'serviceByShipMethod' && (typeof v === 'string' || typeof v === 'number')) next.fedex[k] = v;
+        if (k in FEDEX_DEFAULTS && k !== 'serviceByShipMethod' && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')) next.fedex[k] = v;
       }
     }
     await saveOrderSettings(next);
